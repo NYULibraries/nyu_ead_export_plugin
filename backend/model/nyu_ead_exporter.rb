@@ -156,6 +156,12 @@ class EADSerializer < ASpaceExport::Serializer
     custom_text + data
   end
 
+  def upcase_initial_char(string)
+    get_match = /(^[a-z])(.*)/.match(string)
+    consistent_string = get_match[1].upcase + get_match[2]
+    consistent_string
+  end
+
   def serialize_container(inst, xml, fragments)
     containers = []
     @parent_id = nil
@@ -168,10 +174,13 @@ class EADSerializer < ASpaceExport::Serializer
       atts[:id] = @container_id unless atts[:parent]
       @parent_id = @container_id
 
-      atts[:type] = inst['container']["type_#{n}"]
+      atts[:type] = upcase_initial_char(inst['container']["type_#{n}"])
       text = inst['container']["indicator_#{n}"]
       if n == 1 && inst['instance_type']
-        atts[:label] = I18n.t("enumerations.instance_instance_type.#{inst['instance_type']}", :default => inst['instance_type'])
+        #I18n has a bug. mixed_materials no longer exists here
+        # Maybe they have changed it in v1.5
+        # temporarily upcasing the first initial 
+        atts[:label] = upcase_initial_char(I18n.t("enumerations.instance_instance_type.#{inst['instance_type']}", :default => inst['instance_type']))
         if inst['container']["barcode_1"]
           atts[:label] << " (#{inst['container']['barcode_1']})"
         end
