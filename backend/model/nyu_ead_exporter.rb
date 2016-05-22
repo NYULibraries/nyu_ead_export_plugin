@@ -157,9 +157,55 @@ class EADSerializer < ASpaceExport::Serializer
   end
 
   def upcase_initial_char(string)
+    reformat_string = string
     get_match = /(^[a-z])(.*)/.match(string)
-    consistent_string = get_match[1].upcase + get_match[2]
-    consistent_string
+    if get_match
+      reformat_string = get_match[1].upcase + get_match[2]
+    end
+    reformat_string
+  end
+
+  def serialize_nondid_notes(data, xml, fragments)
+    data.notes.each do |note|
+      next if note["publish"] === false && !@include_unpublished
+      next if note['internal']
+      next if note['type'].nil?
+      next unless (data.archdesc_note_types.include?(note['type']) and note["publish"] == true)
+      if note['type'] == 'legalstatus'
+        xml.accessrestrict(audatt) {
+          serialize_note_content(note, xml, fragments)
+        }
+      else
+        serialize_note_content(note, xml, fragments)
+      end
+    end
+  end
+
+  #not sure if I should do this 
+  def serialize_did_notes(data, xml, fragments)
+    data.notes.each do |note|
+      next if note["publish"] === false && !@include_unpublished
+      next unless (data.did_note_types.include?(note['type'])  and note["publish"] == true)
+
+      audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+      content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
+
+      att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
+      att ||= {}
+
+      case note['type']
+      when 'dimensions', 'physfacet'
+        xml.physdesc(audatt) {
+          xml.send(note['type'], att) {
+            sanitize_mixed_content( content, xml, fragments, ASpaceExport::Utils.include_p?(note['type'])  )
+          }
+        }
+      else
+        xml.send(note['type'], att.merge(audatt)) {
+          sanitize_mixed_content(content, xml, fragments,ASpaceExport::Utils.include_p?(note['type']))
+        }
+      end
+    end
   end
 
   def serialize_container(inst, xml, fragments)
@@ -179,7 +225,7 @@ class EADSerializer < ASpaceExport::Serializer
       if n == 1 && inst['instance_type']
         #I18n has a bug. mixed_materials no longer exists here
         # Maybe they have changed it in v1.5
-        # temporarily upcasing the first initial 
+        # temporarily upcasing the first initial
         atts[:label] = upcase_initial_char(I18n.t("enumerations.instance_instance_type.#{inst['instance_type']}", :default => inst['instance_type']))
         if inst['container']["barcode_1"]
           atts[:label] << " (#{inst['container']['barcode_1']})"
