@@ -6,6 +6,7 @@ class EADSerializer < ASpaceExport::Serializer
   serializer_for :ead
 
   def stream(data)
+    return if data.publish === false && !data.include_unpublished?
     @stream_handler = ASpaceExport::StreamHandler.new
     @fragments = ASpaceExport::RawXMLHandler.new
     @include_unpublished = data.include_unpublished?
@@ -24,14 +25,6 @@ class EADSerializer < ASpaceExport::Serializer
           })
 
         atts = {:level => data.level, :otherlevel => data.other_level}
-
-        if data.publish === false
-          if @include_unpublished
-            atts[:audience] = 'internal'
-          else
-            return
-          end
-        end
 
         atts.reject! {|k, v| v.nil?}
 
@@ -122,9 +115,9 @@ class EADSerializer < ASpaceExport::Serializer
   def serialize_did_notes(data, xml, fragments)
     data.notes.each do |note|
       next if note["publish"] === false && !@include_unpublished
-      next unless data.did_note_types.include?(note['type'])
+      next unless data.did_note_types.include?(note['type'] && note["publish"] == true)
 
-      audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+      #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
       content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
 
       att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
@@ -132,11 +125,12 @@ class EADSerializer < ASpaceExport::Serializer
 
       case note['type']
       when 'dimensions', 'physfacet'
-        xml.physdesc(audatt) {
+        #xml.physdesc(audatt) {
+        xml.physdesc {
           generate_xml(content, xml, fragments, note['type'], att)
         }
       else
-        att.merge!(audatt)
+        #att.merge!(audatt)
         if note['type'] == 'langmaterial'
           label = { :label => "Language of Materials note" }
           att.merge!(label)
@@ -172,7 +166,7 @@ class EADSerializer < ASpaceExport::Serializer
       next if note['type'].nil?
       next unless (data.archdesc_note_types.include?(note['type']) and note["publish"] == true)
       if note['type'] == 'legalstatus'
-        xml.accessrestrict(audatt) {
+        xml.accessrestrict {
           serialize_note_content(note, xml, fragments)
         }
       else
@@ -187,7 +181,7 @@ class EADSerializer < ASpaceExport::Serializer
       next if note["publish"] === false && !@include_unpublished
       next unless (data.did_note_types.include?(note['type'])  and note["publish"] == true)
 
-      audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+      #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
       content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
 
       att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
@@ -195,13 +189,14 @@ class EADSerializer < ASpaceExport::Serializer
 
       case note['type']
       when 'dimensions', 'physfacet'
-        xml.physdesc(audatt) {
+        #xml.physdesc(audatt) {
+        xml.physdesc {
           xml.send(note['type'], att) {
             sanitize_mixed_content( content, xml, fragments, ASpaceExport::Utils.include_p?(note['type'])  )
           }
         }
       else
-        xml.send(note['type'], att.merge(audatt)) {
+        xml.send(note['type'], att) {
           sanitize_mixed_content(content, xml, fragments,ASpaceExport::Utils.include_p?(note['type']))
         }
       end
@@ -238,12 +233,13 @@ class EADSerializer < ASpaceExport::Serializer
   end
 
   def serialize_digital_object(digital_object, xml, fragments)
-    return if digital_object["publish"] === false && !@include_unpublished
+    return if digital_object["publish"] == false && !@include_unpublished
+    return if digital_object["publish"] == false
     file_versions = digital_object['file_versions']
     title = digital_object['title']
     date = digital_object['dates'][0] || {}
 
-    atts = digital_object["publish"] === false ? {:audience => 'internal'} : {}
+    #atts = digital_object["publish"] === false ? {:audience => 'internal'} : {}
 
     content = ""
     content << title if title
@@ -283,14 +279,14 @@ class EADSerializer < ASpaceExport::Serializer
   def serialize_child(data, xml, fragments, c_depth = 1)
     begin
     return if data["publish"] === false && !@include_unpublished
-
+    return if data["publish"] === false
     tag_name = @use_numbered_c_tags ? :"c#{c_depth.to_s.rjust(2, '0')}" : :c
 
     atts = {:level => data.level, :otherlevel => data.other_level, :id => prefix_id(data.ref_id)}
 
-    if data.publish === false
-      atts[:audience] = 'internal'
-    end
+    #if data.publish === false
+      #atts[:audience] = 'internal'
+    #end
 
     atts.reject! {|k, v| v.nil?}
     xml.send(tag_name, atts) {
