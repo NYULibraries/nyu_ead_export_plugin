@@ -233,14 +233,10 @@ class EADSerializer < ASpaceExport::Serializer
   end
 
   def serialize_digital_object(digital_object, xml, fragments)
-    return if digital_object["publish"] == false && !@include_unpublished
-    return if digital_object["publish"] == false
+    return if digital_object["publish"] == false || !@include_unpublished
     file_versions = digital_object['file_versions']
     title = digital_object['title']
     date = digital_object['dates'][0] || {}
-
-    #atts = digital_object["publish"] === false ? {:audience => 'internal'} : {}
-
     content = ""
     content << title if title
     content << ": " if date['expression'] || date['begin']
@@ -252,9 +248,8 @@ class EADSerializer < ASpaceExport::Serializer
         content << "-#{date['end']}"
       end
     end
+    atts = {}
     atts['ns2:title'] = digital_object['title'] if digital_object['title']
-
-
     if file_versions.empty?
       atts['ns2:href'] = digital_object['digital_object_id']
       atts['ns2:actuate'] = 'onRequest'
