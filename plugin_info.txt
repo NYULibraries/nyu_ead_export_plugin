@@ -1,2 +1,2 @@
-AppConfig[:plugins] = ['ead_export_plugin']
+AppConfig[:plugins] = ['nyu_ead_export_plugin']
 plugin_version:0.1.0
