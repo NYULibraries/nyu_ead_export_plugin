@@ -6,6 +6,7 @@ class EADSerializer < ASpaceExport::Serializer
   serializer_for :ead
 
   def stream(data)
+    return if data.publish === false && !data.include_unpublished?
     @stream_handler = ASpaceExport::StreamHandler.new
     @fragments = ASpaceExport::RawXMLHandler.new
     @include_unpublished = data.include_unpublished?
@@ -16,7 +17,7 @@ class EADSerializer < ASpaceExport::Serializer
 
       xml.ead(                  'xmlns:xsi' => 'http://www.w3.org/2001/XMLSchema-instance',
                  'xsi:schemaLocation' => 'urn:isbn:1-931666-22-9 http://www.loc.gov/ead/ead.xsd',
-                 'xmlns:ns2' => 'http://www.w3.org/1999/ns2') {
+                 'xmlns:ns2' => 'http://www.w3.org/1999/xlink') {
 
         xml.text (
           @stream_handler.buffer { |xml, new_fragments|
@@ -24,14 +25,6 @@ class EADSerializer < ASpaceExport::Serializer
           })
 
         atts = {:level => data.level, :otherlevel => data.other_level}
-
-        if data.publish === false
-          if @include_unpublished
-            atts[:audience] = 'internal'
-          else
-            return
-          end
-        end
 
         atts.reject! {|k, v| v.nil?}
 
@@ -122,9 +115,9 @@ class EADSerializer < ASpaceExport::Serializer
   def serialize_did_notes(data, xml, fragments)
     data.notes.each do |note|
       next if note["publish"] === false && !@include_unpublished
-      next unless data.did_note_types.include?(note['type'])
+      next unless data.did_note_types.include?(note['type'] && note["publish"] == true)
 
-      audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+      #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
       content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
 
       att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
@@ -132,11 +125,12 @@ class EADSerializer < ASpaceExport::Serializer
 
       case note['type']
       when 'dimensions', 'physfacet'
-        xml.physdesc(audatt) {
+        #xml.physdesc(audatt) {
+        xml.physdesc {
           generate_xml(content, xml, fragments, note['type'], att)
         }
       else
-        att.merge!(audatt)
+        #att.merge!(audatt)
         if note['type'] == 'langmaterial'
           label = { :label => "Language of Materials note" }
           att.merge!(label)
@@ -155,6 +149,203 @@ class EADSerializer < ASpaceExport::Serializer
   def customize_ead_data(custom_text,data)
     custom_text + data
   end
+
+  def upcase_initial_char(string)
+    reformat_string = string
+    get_match = /(^[a-z])(.*)/.match(string)
+    if get_match
+      reformat_string = get_match[1].upcase + get_match[2]
+    end
+    reformat_string
+  end
+
+  def serialize_nondid_notes(data, xml, fragments)
+    data.notes.each do |note|
+      next if note["publish"] === false && !@include_unpublished
+      next if note['internal']
+      next if note['type'].nil?
+      next unless (data.archdesc_note_types.include?(note['type']) and note["publish"] == true)
+      if note['type'] == 'legalstatus'
+        xml.accessrestrict {
+          serialize_note_content(note, xml, fragments)
+        }
+      else
+        serialize_note_content(note, xml, fragments)
+      end
+    end
+  end
+
+  #not sure if I should do this
+  def serialize_did_notes(data, xml, fragments)
+    data.notes.each do |note|
+      next if note["publish"] === false && !@include_unpublished
+      next unless (data.did_note_types.include?(note['type'])  and note["publish"] == true)
+
+      #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+      content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
+
+      att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
+      att ||= {}
+
+      case note['type']
+      when 'dimensions', 'physfacet'
+        #xml.physdesc(audatt) {
+        xml.physdesc {
+          xml.send(note['type'], att) {
+            sanitize_mixed_content( content, xml, fragments, ASpaceExport::Utils.include_p?(note['type'])  )
+          }
+        }
+      else
+        xml.send(note['type'], att) {
+          sanitize_mixed_content(content, xml, fragments,ASpaceExport::Utils.include_p?(note['type']))
+        }
+      end
+    end
+  end
+
+  def serialize_container(inst, xml, fragments)
+    containers = []
+    @parent_id = nil
+    (1..3).each do |n|
+      atts = {}
+      next unless inst['container'].has_key?("type_#{n}") && inst['container'].has_key?("indicator_#{n}")
+      @container_id = prefix_id(SecureRandom.hex)
+
+      atts[:parent] = @parent_id unless @parent_id.nil?
+      atts[:id] = @container_id unless atts[:parent]
+      @parent_id = @container_id
+
+      atts[:type] = upcase_initial_char(inst['container']["type_#{n}"])
+      text = inst['container']["indicator_#{n}"]
+      if n == 1 && inst['instance_type']
+        #I18n has a bug. mixed_materials no longer exists here
+        # Maybe they have changed it in v1.5
+        # temporarily upcasing the first initial
+        atts[:label] = upcase_initial_char(I18n.t("enumerations.instance_instance_type.#{inst['instance_type']}", :default => inst['instance_type']))
+        if inst['container']["barcode_1"]
+          atts[:label] << " (#{inst['container']['barcode_1']})"
+        end
+      end
+      xml.container(atts) {
+         sanitize_mixed_content(text, xml, fragments)
+      }
+    end
+  end
+
+  def serialize_digital_object(digital_object, xml, fragments)
+    return if digital_object["publish"] == false || !@include_unpublished
+    file_versions = digital_object['file_versions']
+    title = digital_object['title']
+    date = digital_object['dates'][0] || {}
+    content = ""
+    content << title if title
+    content << ": " if date['expression'] || date['begin']
+    if date['expression']
+      content << date['expression']
+    elsif date['begin']
+      content << date['begin']
+      if date['end'] != date['begin']
+        content << "-#{date['end']}"
+      end
+    end
+    atts = {}
+    atts['ns2:title'] = digital_object['title'] if digital_object['title']
+    if file_versions.empty?
+      atts['ns2:href'] = digital_object['digital_object_id']
+      atts['ns2:actuate'] = 'onRequest'
+      atts['ns2:show'] = 'new'
+      xml.dao(atts) {
+        xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
+      }
+    else
+      file_versions.each do |file_version|
+        atts['ns2:href'] = file_version['file_uri'] || digital_object['digital_object_id']
+        atts['ns2:actuate'] = file_version['xlink_actuate_attribute'] || 'onRequest'
+        atts['ns2:show'] = file_version['xlink_show_attribute'] || 'new'
+        atts['ns2:role'] = file_version['use_statement']
+        xml.dao(atts) {
+          xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
+        }
+      end
+    end
+
+  end
+
+  def serialize_child(data, xml, fragments, c_depth = 1)
+    begin
+    return if data["publish"] === false && !@include_unpublished
+    return if data["publish"] === false
+    tag_name = @use_numbered_c_tags ? :"c#{c_depth.to_s.rjust(2, '0')}" : :c
+
+    atts = {:level => data.level, :otherlevel => data.other_level, :id => prefix_id(data.ref_id)}
+
+    #if data.publish === false
+      #atts[:audience] = 'internal'
+    #end
+
+    atts.reject! {|k, v| v.nil?}
+    xml.send(tag_name, atts) {
+
+      xml.did {
+        if (val = data.title)
+          xml.unittitle {  sanitize_mixed_content( val,xml, fragments) }
+        end
+
+        if !data.component_id.nil? && !data.component_id.empty?
+          xml.unitid data.component_id
+        end
+
+        serialize_origination(data, xml, fragments)
+        serialize_extents(data, xml, fragments)
+        serialize_dates(data, xml, fragments)
+        serialize_did_notes(data, xml, fragments)
+
+        EADSerializer.run_serialize_step(data, xml, fragments, :did)
+
+        # TODO: Clean this up more; there's probably a better way to do this.
+        # For whatever reason, the old ead_containers method was not working
+        # on archival_objects (see migrations/models/ead.rb).
+
+        data.instances.each do |inst|
+          if inst.has_key?('container') && !inst['container'].nil?
+            serialize_container(inst, xml, fragments)
+          end
+        end
+
+      }
+
+      data.instances.each do |inst|
+        if inst.has_key?('digital_object') && !inst['digital_object']['_resolved'].nil?
+          serialize_digital_object(inst['digital_object']['_resolved'], xml, fragments)
+        end
+      end
+
+      serialize_nondid_notes(data, xml, fragments)
+
+      serialize_bibliographies(data, xml, fragments)
+
+      serialize_indexes(data, xml, fragments)
+
+      serialize_controlaccess(data, xml, fragments)
+
+      EADSerializer.run_serialize_step(data, xml, fragments, :archdesc)
+
+      data.children_indexes.each do |i|
+        xml.text(
+                 @stream_handler.buffer {|xml, new_fragments|
+                   serialize_child(data.get_child(i), xml, new_fragments, c_depth + 1)
+                 }
+                 )
+      end
+    }
+    rescue => e
+      xml.text "ASPACE EXPORT ERROR : YOU HAVE A PROBLEM WITH YOUR EXPORT OF ARCHIVAL OBJECTS. THE FOLLOWING INFORMATION MAY HELP:\n
+
+                MESSAGE: #{e.message.inspect}  \n
+                TRACE: #{e.backtrace.inspect} \n "
+    end
+  end
+
   def serialize_eadheader(data, xml, fragments)
     eadheader_atts = {:findaidstatus => data.finding_aid_status,
                       :repositoryencoding => "iso15511",
@@ -203,10 +394,10 @@ class EADSerializer < ASpaceExport::Serializer
 
           if data.repo.image_url
             xml.p ( { "id" => "logostmt" } ) {
-              xml.extref ({"xlink:href" => data.repo.image_url,
-                          "xlink:actuate" => "onLoad",
-                          "xlink:show" => "embed",
-                          "xlink:type" => "simple"
+              xml.extref ({"ns2:href" => data.repo.image_url,
+                          "ns2:actuate" => "onLoad",
+                          "ns2:show" => "embed",
+                          "ns2:type" => "simple"
                           })
                           }
           end
