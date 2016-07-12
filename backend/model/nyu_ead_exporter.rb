@@ -259,10 +259,12 @@ class EADSerializer < ASpaceExport::Serializer
       }
     else
       file_versions.each do |file_version|
+        # reading from the yml file that's set up for aspace
+        use = I18n.t("enumerations.file_version_use_statement.#{file_version['use_statement']}")
         atts['ns2:href'] = file_version['file_uri'] || digital_object['digital_object_id']
         atts['ns2:actuate'] = file_version['xlink_actuate_attribute'] || 'onRequest'
         atts['ns2:show'] = file_version['xlink_show_attribute'] || 'new'
-        atts['ns2:role'] = file_version['use_statement']
+        atts['ns2:role'] = use
         xml.dao(atts) {
           xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
         }
