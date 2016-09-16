@@ -205,16 +205,15 @@ class EADSerializer < ASpaceExport::Serializer
 
   def serialize_container(inst, xml, fragments)
     containers = []
-    @parent_id = nil
+    parent_id = nil
+    container_id = prefix_id(SecureRandom.hex) if inst['container'].has_key?("type_1")
     (1..3).each do |n|
       atts = {}
       next unless inst['container'].has_key?("type_#{n}") && inst['container'].has_key?("indicator_#{n}")
-      @container_id = prefix_id(SecureRandom.hex)
-
-      atts[:parent] = @parent_id unless @parent_id.nil?
-      atts[:id] = @container_id unless atts[:parent]
-      @parent_id = @container_id
-
+      if n > 1
+        atts[:parent] = container_id
+      end
+      atts[:id] = container_id unless atts[:parent]
       atts[:type] = upcase_initial_char(inst['container']["type_#{n}"])
       text = inst['container']["indicator_#{n}"]
       if n == 1 && inst['instance_type']
@@ -226,6 +225,7 @@ class EADSerializer < ASpaceExport::Serializer
           atts[:label] << " (#{inst['container']['barcode_1']})"
         end
       end
+
       xml.container(atts) {
          sanitize_mixed_content(text, xml, fragments)
       }
@@ -307,7 +307,6 @@ class EADSerializer < ASpaceExport::Serializer
         # TODO: Clean this up more; there's probably a better way to do this.
         # For whatever reason, the old ead_containers method was not working
         # on archival_objects (see migrations/models/ead.rb).
-
         data.instances.each do |inst|
           if inst.has_key?('container') && !inst['container'].nil?
             serialize_container(inst, xml, fragments)
