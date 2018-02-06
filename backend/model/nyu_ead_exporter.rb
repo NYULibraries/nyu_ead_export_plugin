@@ -58,9 +58,11 @@ class EADSerializer < ASpaceExport::Serializer
             serialize_dates(data, xml, @fragments)
 
             serialize_did_notes(data, xml, @fragments)
-
-            data.instances_with_containers.each do |instance|
-              serialize_container(instance, xml, @fragments)
+            
+            unless data.instances_with_containers.nil?
+              data.instances_with_containers.each do |instance|
+                serialize_container(instance, xml, @fragments)
+              end
             end
 
             EADSerializer.run_serialize_step(data, xml, @fragments, :did)
