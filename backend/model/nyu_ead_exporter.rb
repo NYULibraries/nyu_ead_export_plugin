@@ -10,6 +10,7 @@ class EADSerializer < ASpaceExport::Serializer
     @stream_handler = ASpaceExport::StreamHandler.new
     @fragments = ASpaceExport::RawXMLHandler.new
     @include_unpublished = data.include_unpublished?
+    @include_daos = data.include_daos?
     @use_numbered_c_tags = data.use_numbered_c_tags?
     @id_prefix = I18n.t('archival_object.ref_id_export_prefix', :default => 'aspace_')
     doc = Nokogiri::XML::Builder.new(:encoding => "UTF-8") do |xml|
@@ -58,12 +59,12 @@ class EADSerializer < ASpaceExport::Serializer
             serialize_dates(data, xml, @fragments)
 
             serialize_did_notes(data, xml, @fragments)
-            
-            unless data.instances_with_containers.nil?
-              data.instances_with_containers.each do |instance|
+
+            #unless data.instances_with_containers.nil?
+              data.instances_with_sub_containers.each do |instance|
                 serialize_container(instance, xml, @fragments)
               end
-            end
+            #end
 
             EADSerializer.run_serialize_step(data, xml, @fragments, :did)
 
@@ -206,39 +207,59 @@ class EADSerializer < ASpaceExport::Serializer
   end
 
   def serialize_container(inst, xml, fragments)
-    containers = []
-    parent_id = nil
-    container_id = prefix_id(SecureRandom.hex) if inst['container'].has_key?("type_1")
-    (1..3).each do |n|
+
+    atts = {}
+
+    sub = inst['sub_container']
+    top = sub['top_container']['_resolved']
+
+    atts[:id] = prefix_id(SecureRandom.hex)
+    last_id = atts[:id]
+
+    atts[:type] =  upcase_initial_char(top['type'])
+
+    text = top['indicator']
+
+    atts[:label] = upcase_initial_char(I18n.t("enumerations.instance_instance_type.#{inst['instance_type']}",
+                          :default => inst['instance_type']))
+    atts[:label] << " [#{top['barcode']}]" if top['barcode']
+
+    if (cp = top['container_profile'])
+      atts[:altrender] = cp['_resolved']['url'] || cp['_resolved']['name']
+    end
+#binding.remote_pry if atts[:label] =~ /31142063173390/
+    xml.container(atts) {
+
+      sanitize_mixed_content(text, xml, fragments)
+    }
+
+    (2..3).each do |n|
       atts = {}
-      next unless inst['container'].has_key?("type_#{n}") && inst['container'].has_key?("indicator_#{n}")
-      if n > 1
-        atts[:parent] = container_id
-      end
-      atts[:id] = container_id unless atts[:parent]
-      atts[:type] = upcase_initial_char(inst['container']["type_#{n}"])
-      text = inst['container']["indicator_#{n}"]
-      if n == 1 && inst['instance_type']
-        #I18n has a bug. mixed_materials no longer exists here
-        # Maybe they have changed it in v1.5
-        # temporarily upcasing the first initial
-        atts[:label] = upcase_initial_char(I18n.t("enumerations.instance_instance_type.#{inst['instance_type']}", :default => inst['instance_type']))
-        if inst['container']["barcode_1"]
-          atts[:label] << " (#{inst['container']['barcode_1']})"
-        end
-      end
+
+      next unless sub["type_#{n}"]
+
+      atts[:id] = prefix_id(SecureRandom.hex)
+      atts[:parent] = last_id
+      last_id = atts[:id]
+
+      atts[:type] =  upcase_initial_char(sub["type_#{n}"])
+      text = sub["indicator_#{n}"]
 
       xml.container(atts) {
-         sanitize_mixed_content(text, xml, fragments)
+        sanitize_mixed_content(text, xml, fragments)
       }
     end
   end
-
   def serialize_digital_object(digital_object, xml, fragments)
-    return if digital_object["publish"] == false || !@include_unpublished
+    return if digital_object["publish"] === false && !@include_unpublished
+    return if digital_object["suppressed"] === true
+
     file_versions = digital_object['file_versions']
     title = digital_object['title']
     date = digital_object['dates'][0] || {}
+
+    atts = digital_object["publish"] === false ? {:audience => 'internal'} : {}
+
     content = ""
     content << title if title
     content << ": " if date['expression'] || date['begin']
@@ -250,30 +271,42 @@ class EADSerializer < ASpaceExport::Serializer
         content << "-#{date['end']}"
       end
     end
-    atts = {}
-    atts['ns2:title'] = digital_object['title'] if digital_object['title']
+    atts['xlink:title'] = digital_object['title'] if digital_object['title']
+
+
     if file_versions.empty?
-      atts['ns2:href'] = digital_object['digital_object_id']
-      atts['ns2:actuate'] = 'onRequest'
-      atts['ns2:show'] = 'new'
+      atts['xlink:type'] = 'simple'
+      atts['xlink:href'] = digital_object['digital_object_id']
+      atts['xlink:actuate'] = 'onRequest'
+      atts['xlink:show'] = 'new'
       xml.dao(atts) {
         xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
       }
-    else
-      file_versions.each do |file_version|
-        # reading from the yml file that's set up for aspace
-        use = I18n.t("enumerations.file_version_use_statement.#{file_version['use_statement']}")
-        atts['ns2:href'] = file_version['file_uri'] || digital_object['digital_object_id']
-        atts['ns2:actuate'] = file_version['xlink_actuate_attribute'] || 'onRequest'
-        atts['ns2:show'] = file_version['xlink_show_attribute'] || 'new'
-        atts['ns2:role'] = use
+    elsif file_versions.length == 1
+        atts['xlink:type'] = 'simple'
+        atts['xlink:href'] = file_versions.first['file_uri'] || digital_object['digital_object_id']
+        atts['xlink:actuate'] = file_versions.first['xlink_actuate_attribute'] || 'onRequest'
+        atts['xlink:show'] = file_versions.first['xlink_show_attribute'] || 'new'
+        atts['xlink:role'] = file_versions.first['use_statement'] if file_versions.first['use_statement']
         xml.dao(atts) {
           xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
         }
-      end
+    else
+      xml.daogrp( atts.merge( { 'xlink:type' => 'extended'} ) ) {
+        xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
+        file_versions.each do |file_version|
+          use = I18n.t("enumerations.file_version_use_statement.#{file_version['use_statement']}")
+          atts['xlink:type'] = 'locator'
+          atts['xlink:href'] = file_version['file_uri'] || digital_object['digital_object_id']
+          atts['xlink:role'] = file_version['use_statement'] if file_version['use_statement']
+          atts['xlink:title'] = file_version['caption'] if file_version['caption']
+          atts['ns2:role'] = use
+          xml.daoloc(atts)
+        end
+      }
     end
-
   end
+
 
   def serialize_child(data, xml, fragments, c_depth = 1)
     begin
@@ -299,6 +332,12 @@ class EADSerializer < ASpaceExport::Serializer
           xml.unitid data.component_id
         end
 
+        if @include_unpublished
+          data.external_ids.each do |exid|
+            xml.unitid  ({ "audience" => "internal",  "type" => exid['source'], "identifier" => exid['external_id']}) { xml.text exid['external_id']}
+          end
+        end
+
         serialize_origination(data, xml, fragments)
         serialize_extents(data, xml, fragments)
         serialize_dates(data, xml, fragments)
@@ -306,22 +345,18 @@ class EADSerializer < ASpaceExport::Serializer
 
         EADSerializer.run_serialize_step(data, xml, fragments, :did)
 
-        # TODO: Clean this up more; there's probably a better way to do this.
-        # For whatever reason, the old ead_containers method was not working
-        # on archival_objects (see migrations/models/ead.rb).
-        data.instances.each do |inst|
-          if inst.has_key?('container') && !inst['container'].nil?
-            serialize_container(inst, xml, fragments)
+        data.instances_with_sub_containers.each do |instance|
+            serialize_container(instance, xml, @fragments)
+        end
+
+        if @include_daos
+          data.instances_with_digital_objects.each do |instance|
+            serialize_digital_object(instance['digital_object']['_resolved'], xml, fragments)
           end
         end
 
       }
 
-      data.instances.each do |inst|
-        if inst.has_key?('digital_object') && !inst['digital_object']['_resolved'].nil?
-          serialize_digital_object(inst['digital_object']['_resolved'], xml, fragments)
-        end
-      end
 
       serialize_nondid_notes(data, xml, fragments)
 
