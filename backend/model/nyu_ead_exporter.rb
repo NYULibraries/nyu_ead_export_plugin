@@ -61,11 +61,11 @@ class EADSerializer < ASpaceExport::Serializer
 
                     serialize_did_notes(data, xml, @fragments)
 
-                    #unless data.instances_with_containers.nil?
+
                     data.instances_with_sub_containers.each do |instance|
                       serialize_container(instance, xml, @fragments)
                     end
-                    #end
+
 
                     EADSerializer.run_serialize_step(data, xml, @fragments, :did)
 
@@ -208,13 +208,13 @@ class EADSerializer < ASpaceExport::Serializer
         end
 
         def serialize_container(inst, xml, fragments)
-
+          containers = []
           atts = {}
-
           sub = inst['sub_container']
           top = sub['top_container']['_resolved']
 
           atts[:id] = prefix_id(SecureRandom.hex)
+          parent_id = atts[:id]
           last_id = atts[:id]
 
           atts[:type] =  upcase_initial_char(top['type'])
@@ -228,7 +228,7 @@ class EADSerializer < ASpaceExport::Serializer
             if (cp = top['container_profile'])
               atts[:altrender] = cp['_resolved']['url'] || cp['_resolved']['name']
             end
-            #binding.remote_pry if atts[:label] =~ /31142063173390/
+
             xml.container(atts) {
 
               sanitize_mixed_content(text, xml, fragments)
@@ -236,19 +236,15 @@ class EADSerializer < ASpaceExport::Serializer
 
             (2..3).each do |n|
               atts = {}
-
               next unless sub["type_#{n}"]
-
-              atts[:id] = prefix_id(SecureRandom.hex)
-              atts[:parent] = last_id
-              last_id = atts[:id]
-
+              atts[:parent] = parent_id
               atts[:type] =  upcase_initial_char(sub["type_#{n}"])
               text = sub["indicator_#{n}"]
 
               xml.container(atts) {
                 sanitize_mixed_content(text, xml, fragments)
               }
+
             end
           end
           def serialize_digital_object(digital_object, xml, fragments)
@@ -284,7 +280,6 @@ class EADSerializer < ASpaceExport::Serializer
                 xml.daodesc{ sanitize_mixed_content(content, xml, fragments, true) } if content
               }
             elsif file_versions.length == 1
-              #binding.remote_pry
               use = file_versions.first['use_statement'] if file_versions.first['use_statement']
               atts[@xlink_namespace+':type'] = 'simple'
               atts[@xlink_namespace+':href'] = file_versions.first['file_uri'] || digital_object['digital_object_id']
@@ -353,7 +348,6 @@ class EADSerializer < ASpaceExport::Serializer
                     serialize_container(instance, xml, @fragments)
                   end
                 }
-                #binding.remote_pry
                 if @include_daos
                   data.instances_with_digital_objects.each do |instance|
                     serialize_digital_object(instance['digital_object']['_resolved'], xml, fragments)
