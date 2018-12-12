@@ -6,7 +6,12 @@ class EADSerializer < ASpaceExport::Serializer
   serializer_for :ead
 
   def stream(data)
-    return if data.publish === false && !data.include_unpublished?
+    #return if data.publish === false && !data.include_unpublished?
+    
+    if data.publish === false
+      atts[:audience] = 'internal'
+    end
+    
     @xlink_namespace = "ns2"
     @stream_handler = ASpaceExport::StreamHandler.new
     @fragments = ASpaceExport::RawXMLHandler.new
@@ -119,7 +124,7 @@ class EADSerializer < ASpaceExport::Serializer
         def serialize_did_notes(data, xml, fragments)
           data.notes.each do |note|
             next if note["publish"] === false && !@include_unpublished
-            next unless data.did_note_types.include?(note['type'] && note["publish"] == true)
+            next unless data.did_note_types.include?(note['type']) # && note["publish"] == true)
 
             #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
             content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
@@ -168,7 +173,8 @@ class EADSerializer < ASpaceExport::Serializer
             next if note["publish"] === false && !@include_unpublished
             next if note['internal']
             next if note['type'].nil?
-            next unless (data.archdesc_note_types.include?(note['type']) and note["publish"] == true)
+
+            next unless data.archdesc_note_types.include?(note['type']) # and note["publish"] == true)
             if note['type'] == 'legalstatus'
               xml.accessrestrict {
                 serialize_note_content(note, xml, fragments)
@@ -183,9 +189,9 @@ class EADSerializer < ASpaceExport::Serializer
         def serialize_did_notes(data, xml, fragments)
           data.notes.each do |note|
             next if note["publish"] === false && !@include_unpublished
-            next unless (data.did_note_types.include?(note['type'])  and note["publish"] == true)
+            next unless data.did_note_types.include?(note['type']) # and note["publish"] == true)
 
-            #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+            audatt = note["publish"] === false ? {:audience => 'internal'} : {}
             content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
 
             att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
@@ -310,7 +316,7 @@ class EADSerializer < ASpaceExport::Serializer
           def serialize_child(data, xml, fragments, c_depth = 1)
             begin
               return if data["publish"] === false && !@include_unpublished
-              return if data["publish"] === false
+              return if data["supressed"] === true
               tag_name = @use_numbered_c_tags ? :"c#{c_depth.to_s.rjust(2, '0')}" : :c
 
               atts = {:level => data.level, :otherlevel => data.other_level, :id => prefix_id(data.ref_id)}
