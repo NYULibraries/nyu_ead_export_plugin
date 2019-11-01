@@ -4,6 +4,139 @@ require 'time'
 
 class EADSerializer < ASpaceExport::Serializer
   serializer_for :ead
+  def self.add_serialize_step(serialize_step)
+    @extra_serialize_steps ||= []
+    @extra_serialize_steps << serialize_step
+  end
+
+  def self.run_serialize_step(data, xml, fragments, context)
+    Array(@extra_serialize_steps).each do |step|
+      step.new.call(data, xml, fragments, context)
+    end
+  end
+
+
+  def prefix_id(id)
+    if id.nil? or id.empty? or id == 'null'
+      ""
+    elsif id =~ /^#{@id_prefix}/
+      id
+    else
+      "#{@id_prefix}#{id}"
+    end
+  end
+
+  def xml_errors(content)
+    # there are message we want to ignore. annoying that java xml lib doesn't
+    # use codes like libxml does...
+    ignore = [ /Namespace prefix .* is not defined/, /The prefix .* is not bound/  ]
+    ignore = Regexp.union(ignore)
+    # the "wrap" is just to ensure that there is a psuedo root element to eliminate a "false" error
+    Nokogiri::XML("<wrap>#{content}</wrap>").errors.reject { |e| e.message =~ ignore  }
+  end
+
+  # ANW-716: We may have content with a mix of loose '&' chars that need to be escaped, along with pre-escaped HTML entities
+  # Example:
+  # c                 => "This is the &lt; test & for the <title>Sanford &amp; Son</title>
+  # escape_content(c) => "This is the &lt; test &amp; for the <title>Sanford &amp; Son</title>
+  # we want to leave the pre-escaped entities alone, and escape the loose & chars
+
+  def escape_content(content)
+    # first, find any pre-escaped entities and "mark" them by replacing & with @@
+    # so something like &lt; becomes @@lt;
+    # and &#1234 becomes @@#1234
+
+    content.gsub!(/&\w+;/) {|t| t.gsub('&', '@@')}
+    content.gsub!(/&#\d{4}/) {|t| t.gsub('&', '@@')}
+    content.gsub!(/&#\d{3}/) {|t| t.gsub('&', '@@')}
+
+    # now we know that all & characters remaining are not part of some pre-escaped entity, and we can escape them safely
+    content.gsub!('&', '&amp;')
+
+    # 'unmark' our pre-escaped entities
+    content.gsub!(/@@\w+;/) {|t| t.gsub('@@', '&')}
+    content.gsub!(/@@#\d{4}/) {|t| t.gsub('@@', '&')}
+    content.gsub!(/@@#\d{3}/) {|t| t.gsub('@@', '&')}
+
+    return content
+  end
+
+
+  def handle_linebreaks(content)
+    # 4archon...
+    content.gsub!("\n\t", "\n\n")
+    # if there's already p tags, just leave as is
+    return content if ( content.strip =~ /^<p(\s|\/|>)/ or content.strip.length < 1 )
+    original_content = content
+    blocks = content.split("\n\n").select { |b| !b.strip.empty? }
+    if blocks.length > 1
+      content = blocks.inject("") do |c,n|
+        c << "<p>#{escape_content(n.chomp)}</p>"
+      end
+    else
+      content = "<p>#{escape_content(content.strip)}</p>"
+    end
+
+    # just return the original content if there's still problems
+    xml_errors(content).any? ? original_content : content
+  end
+
+  def strip_p(content)
+    content.gsub("<p>", "").gsub("</p>", "").gsub("<p/>", '')
+  end
+
+  def remove_smart_quotes(content)
+    content = content.gsub(/\xE2\x80\x9C/, '"').gsub(/\xE2\x80\x9D/, '"').gsub(/\xE2\x80\x98/, "\'").gsub(/\xE2\x80\x99/, "\'")
+  end
+
+
+  # ANW-669: Fix for attributes in mixed content causing errors when validating against the EAD schema.
+
+  # If content looks like it contains a valid XML element with an attribute from the expected list,
+  # then replace the attribute like " foo=" with " xlink:foo=".
+
+  # References used for valid element and attribute names:
+  # https://www.xml.com/pub/a/2001/07/25/namingparts.html
+  # https://razzed.com/2009/01/30/valid-characters-in-attribute-names-in-htmlxml/
+
+  def add_xlink_prefix(content)
+    %w{ actuate arcrole entityref from href id linktype parent role show target title to xpointer }.each do | xa |
+      content.gsub!(/ #{xa}=/) {|match| " xlink:#{match.strip}"} if content =~ / #{xa}=/
+    end
+    content
+  end
+
+  def sanitize_mixed_content(content, context, fragments, allow_p = false  )
+    # remove smart quotes from text
+    content = remove_smart_quotes(content)
+
+    # br's should be self closing
+    content = content.gsub("<br>", "<br/>").gsub("</br>", '')
+    # lets break the text, if it has linebreaks but no p tags.
+
+    if allow_p
+      content = handle_linebreaks(content)
+    else
+      escape_content(content)
+      content = strip_p(content)
+    end
+
+    # ANW-669 - only certain EAD elements will have attributes that need
+    # xlink added so only do this processing if the element is there
+    # attribute check is inside the add_xlink_prefix method
+    xlink_eles = %w{ arc archref bibref extptr extptrloc extref extrefloc linkgrp ptr ptrloc ref refloc resource title }
+    content = add_xlink_prefix(content) if xlink_eles.any? { |word| content =~ /<#{word}\s/ }
+
+    begin
+      if ASpaceExport::Utils.has_html?(content)
+        context.text (fragments << content )
+      else
+        context.text content.gsub("&amp;", "&") #thanks, Nokogiri
+      end
+    rescue
+      context.cdata content
+    end
+  end
 
   def stream(data)
     return if data.publish === false && !data.include_unpublished?
@@ -36,9 +169,8 @@ class EADSerializer < ASpaceExport::Serializer
 
                   xml.did {
 
-
-                    if (val = data.language)
-                      xml.langmaterial { xml.language(:langcode => val) }
+                    if (languages = data.lang_materials)
+                      serialize_languages(languages, xml)
                     end
 
                     if (val = data.repo.name)
@@ -462,7 +594,7 @@ class EADSerializer < ASpaceExport::Serializer
                       creation = "This finding aid was produced using ArchivesSpace <date>#{Time.now.utc.iso8601.gsub!('Z','')}</date>"
                       xml.creation {  sanitize_mixed_content( creation, xml, fragments) }
 
-                      if (val = data.finding_aid_language)
+                      if (val = data.finding_aid_language_note)
                         xml.langusage (fragments << val)
                       end
 
