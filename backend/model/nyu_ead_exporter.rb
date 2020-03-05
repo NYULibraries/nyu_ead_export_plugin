@@ -170,7 +170,7 @@ class EADSerializer < ASpaceExport::Serializer
                   xml.did {
 
                     if (languages = data.lang_materials)
-                      serialize_languages(languages, xml)
+                      serialize_languages(languages, xml, fragments)
                     end
 
                     if (val = data.repo.name)
