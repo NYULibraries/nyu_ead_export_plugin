@@ -1,6 +1,7 @@
 require 'nokogiri'
 require 'securerandom'
 require 'time'
+require 'yaml'
 
 class EADSerializer < ASpaceExport::Serializer
   serializer_for :ead
@@ -139,7 +140,14 @@ class EADSerializer < ASpaceExport::Serializer
   end
 
   def stream(data)
-    return if data.publish === false && !data.include_unpublished?
+    plug_config = YAML.load(File.read("plugins/nyu_ead_export_plugin/config.yml"))
+
+    return if data.publish === false && !data.include_unpublished? && plug_config["nyhs_mode"] === false
+
+    if data.publish === false
+      atts[:audience] = 'internal'
+    end
+
     @xlink_namespace = "ns2"
     @stream_handler = ASpaceExport::StreamHandler.new
     @fragments = ASpaceExport::RawXMLHandler.new
