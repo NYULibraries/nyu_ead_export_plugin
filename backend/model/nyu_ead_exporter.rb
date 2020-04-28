@@ -1,9 +1,13 @@
 require 'nokogiri'
 require 'securerandom'
-require 'time'
+require 'cgi'
 
 class EADSerializer < ASpaceExport::Serializer
   serializer_for :ead
+
+  # Allow plugins to hook in to record processing by providing their own
+  # serialization step (a class with a 'call' method accepting the arguments
+  # defined in `run_serialize_step`.
   def self.add_serialize_step(serialize_step)
     @extra_serialize_steps ||= []
     @extra_serialize_steps << serialize_step
@@ -139,7 +143,6 @@ class EADSerializer < ASpaceExport::Serializer
   end
 
   def stream(data)
-    return if data.publish === false && !data.include_unpublished?
     @xlink_namespace = "ns2"
     @stream_handler = ASpaceExport::StreamHandler.new
     @fragments = ASpaceExport::RawXMLHandler.new
@@ -147,12 +150,21 @@ class EADSerializer < ASpaceExport::Serializer
     @include_daos = data.include_daos?
     @use_numbered_c_tags = data.use_numbered_c_tags?
     @id_prefix = I18n.t('archival_object.ref_id_export_prefix', :default => 'aspace_')
+
     doc = Nokogiri::XML::Builder.new(:encoding => "UTF-8") do |xml|
       begin
 
-        xml.ead(                  'xmlns:xsi' => 'http://www.w3.org/2001/XMLSchema-instance',
-          'xsi:schemaLocation' => 'urn:isbn:1-931666-22-9 http://www.loc.gov/ead/ead.xsd',
-          "xmlns:#{@xlink_namespace}" => 'http://www.w3.org/1999/xlink') {
+      ead_attributes = {
+        'xmlns:xsi' => 'http://www.w3.org/2001/XMLSchema-instance',
+        'xsi:schemaLocation' => 'urn:isbn:1-931666-22-9 http://www.loc.gov/ead/ead.xsd',
+        'xmlns:ns2' => 'http://www.w3.org/1999/xlink'
+      }
+
+      if data.publish === false
+        ead_attributes['audience'] = 'internal'
+      end
+
+      xml.ead( ead_attributes ) {
 
             xml.text (
               @stream_handler.buffer { |xml, new_fragments|
@@ -187,7 +199,13 @@ class EADSerializer < ASpaceExport::Serializer
 
                     xml.unitid (0..3).map{|i| data.send("id_#{i}")}.compact.join('.')
 
-                    serialize_extents(data, xml, @fragments)
+            if @include_unpublished
+              data.external_ids.each do |exid|
+                xml.unitid  ({ "audience" => "internal", "type" => exid['source'], "identifier" => exid['external_id']}) { xml.text exid['external_id']}
+              end
+            end
+
+            serialize_extents(data, xml, @fragments)
 
                     serialize_dates(data, xml, @fragments)
 
@@ -251,7 +269,7 @@ class EADSerializer < ASpaceExport::Serializer
         def serialize_did_notes(data, xml, fragments)
           data.notes.each do |note|
             next if note["publish"] === false && !@include_unpublished
-            next unless data.did_note_types.include?(note['type'] && note["publish"] == true)
+            next unless data.did_note_types.include?(note['type']) # && note["publish"] == true)
 
             #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
             content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
@@ -300,7 +318,7 @@ class EADSerializer < ASpaceExport::Serializer
             next if note["publish"] === false && !@include_unpublished
             next if note['internal']
             next if note['type'].nil?
-            next unless (data.archdesc_note_types.include?(note['type']) and note["publish"] == true)
+            next unless data.archdesc_note_types.include?(note['type']) # and note["publish"] == true)
             if note['type'] == 'legalstatus'
               xml.accessrestrict {
                 serialize_note_content(note, xml, fragments)
@@ -315,9 +333,9 @@ class EADSerializer < ASpaceExport::Serializer
         def serialize_did_notes(data, xml, fragments)
           data.notes.each do |note|
             next if note["publish"] === false && !@include_unpublished
-            next unless (data.did_note_types.include?(note['type'])  and note["publish"] == true)
+            next unless data.did_note_types.include?(note['type']) # and note["publish"] == true)
 
-            #audatt = note["publish"] === false ? {:audience => 'internal'} : {}
+            audatt = note["publish"] === false ? {:audience => 'internal'} : {}
             content = ASpaceExport::Utils.extract_note_text(note, @include_unpublished)
 
             att = { :id => prefix_id(note['persistent_id']) }.reject {|k,v| v.nil? || v.empty? || v == "null" }
@@ -325,8 +343,8 @@ class EADSerializer < ASpaceExport::Serializer
 
             case note['type']
             when 'dimensions', 'physfacet'
-              #xml.physdesc(audatt) {
-              xml.physdesc {
+              xml.physdesc(audatt) {
+              #xml.physdesc {
                 xml.send(note['type'], att) {
                   sanitize_mixed_content( content, xml, fragments, ASpaceExport::Utils.include_p?(note['type'])  )
                 }
@@ -442,14 +460,14 @@ class EADSerializer < ASpaceExport::Serializer
           def serialize_child(data, xml, fragments, c_depth = 1)
             begin
               return if data["publish"] === false && !@include_unpublished
-              return if data["publish"] === false
+              return if data["supressed"] === true
               tag_name = @use_numbered_c_tags ? :"c#{c_depth.to_s.rjust(2, '0')}" : :c
 
               atts = {:level => data.level, :otherlevel => data.other_level, :id => prefix_id(data.ref_id)}
 
-              #if data.publish === false
-              #atts[:audience] = 'internal'
-              #end
+              if data.publish === false
+                atts[:audience] = 'internal'
+              end
 
               atts.reject! {|k, v| v.nil?}
               xml.send(tag_name, atts) {
