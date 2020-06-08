@@ -103,9 +103,9 @@ class EADSerializer < ASpaceExport::Serializer
   # https://www.xml.com/pub/a/2001/07/25/namingparts.html
   # https://razzed.com/2009/01/30/valid-characters-in-attribute-names-in-htmlxml/
 
-  def add_xlink_prefix(content)
+  def add_ns2_prefix(content)
     %w{ actuate arcrole entityref from href id linktype parent role show target title to xpointer }.each do | xa |
-      content.gsub!(/ #{xa}=/) {|match| " xlink:#{match.strip}"} if content =~ / #{xa}=/
+      content.gsub!(/ #{xa}=/) {|match| " ns2:#{match.strip}"} if content =~ / #{xa}=/
     end
     content
   end
@@ -129,7 +129,7 @@ class EADSerializer < ASpaceExport::Serializer
     # xlink added so only do this processing if the element is there
     # attribute check is inside the add_xlink_prefix method
     xlink_eles = %w{ arc archref bibref extptr extptrloc extref extrefloc linkgrp ptr ptrloc ref refloc resource title }
-    content = add_xlink_prefix(content) if xlink_eles.any? { |word| content =~ /<#{word}\s/ }
+    content = add_ns2_prefix(content) if xlink_eles.any? { |word| content =~ /<#{word}\s/ }
 
     begin
       if ASpaceExport::Utils.has_html?(content)
