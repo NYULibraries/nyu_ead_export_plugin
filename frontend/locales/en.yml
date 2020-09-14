@@ -1,0 +1,7 @@
+en:
+  plugins:
+    nyu_ead_export_plugin:
+      label: NYU EAD Export Plugin
+      title: NYU EAD Export Plugin
+      version: 2.8.0
+      url: https://github.com/NYULibraries/nyu_ead_export_plugin/releases/tag/v2.8.0
